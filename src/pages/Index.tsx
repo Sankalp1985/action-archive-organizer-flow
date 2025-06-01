@@ -13,7 +13,7 @@ import FileUploader from '@/components/FileUploader';
 import ActionCard from '@/components/ActionCard';
 import LoginForm from '@/components/LoginForm';
 import { supabase } from '@/integrations/supabase/client';
-import type { User, Session } from '@supabase/supabase-js';
+import type { User as SupabaseUser, Session } from '@supabase/supabase-js';
 
 interface Profile {
   id: string;
@@ -47,7 +47,7 @@ interface Action {
 }
 
 const Index = () => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SupabaseUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [actions, setActions] = useState<Action[]>([]);

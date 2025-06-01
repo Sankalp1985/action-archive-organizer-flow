@@ -12,11 +12,14 @@ import { toast } from '@/hooks/use-toast';
 import FileUploader from '@/components/FileUploader';
 import ActionCard from '@/components/ActionCard';
 import LoginForm from '@/components/LoginForm';
+import { supabase } from '@/integrations/supabase/client';
+import type { User, Session } from '@supabase/supabase-js';
 
-interface User {
+interface Profile {
   id: string;
   username: string;
-  email: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface FileItem {
@@ -44,102 +47,226 @@ interface Action {
 }
 
 const Index = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [actions, setActions] = useState<Action[]>([]);
   const [newActionTitle, setNewActionTitle] = useState('');
-  const [showFileUploader, setShowFileUploader] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Load user and actions from localStorage
+  // Set up auth state listener
   useEffect(() => {
-    const savedUser = localStorage.getItem('currentUser');
-    if (savedUser) {
-      const user = JSON.parse(savedUser);
-      setCurrentUser(user);
-      loadUserActions(user.id);
-    }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log('Auth state changed:', event, session);
+        setSession(session);
+        setUser(session?.user ?? null);
+        
+        if (session?.user) {
+          // Fetch user profile
+          setTimeout(() => {
+            fetchUserProfile(session.user.id);
+            loadUserActions(session.user.id);
+          }, 0);
+        } else {
+          setProfile(null);
+          setActions([]);
+        }
+        setLoading(false);
+      }
+    );
+
+    // Check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      
+      if (session?.user) {
+        fetchUserProfile(session.user.id);
+        loadUserActions(session.user.id);
+      }
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const loadUserActions = (userId: string) => {
-    const userActionsKey = `actions_${userId}`;
-    const savedActions = localStorage.getItem(userActionsKey);
-    if (savedActions) {
-      const parsedActions = JSON.parse(savedActions).map((action: any) => ({
-        ...action,
-        createdAt: new Date(action.createdAt)
-      }));
-      setActions(parsedActions);
+  const fetchUserProfile = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        return;
+      }
+
+      setProfile(data);
+    } catch (error) {
+      console.error('Error fetching profile:', error);
     }
   };
 
-  const saveUserActions = (userId: string, userActions: Action[]) => {
-    const userActionsKey = `actions_${userId}`;
-    localStorage.setItem(userActionsKey, JSON.stringify(userActions));
+  const loadUserActions = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('actions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error loading actions:', error);
+        return;
+      }
+
+      // Convert to local format for now (we'll migrate fully later)
+      const formattedActions: Action[] = data.map(action => ({
+        id: action.id,
+        title: action.title,
+        status: action.status as 'todo' | 'done',
+        createdAt: new Date(action.created_at),
+        textInputs: [], // We'll implement this later
+        files: [] // We'll implement this later
+      }));
+
+      setActions(formattedActions);
+    } catch (error) {
+      console.error('Error loading actions:', error);
+    }
   };
 
-  const handleLogin = (user: User) => {
-    setCurrentUser(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
-    loadUserActions(user.id);
-    toast({
-      title: "Welcome back!",
-      description: `Logged in as ${user.username}`,
-    });
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Error signing out:', error);
+        toast({
+          title: "Error",
+          description: "Failed to sign out",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setUser(null);
+      setSession(null);
+      setProfile(null);
+      setActions([]);
+      
+      toast({
+        title: "Logged out",
+        description: "See you next time!",
+      });
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setActions([]);
-    localStorage.removeItem('currentUser');
-    toast({
-      title: "Logged out",
-      description: "See you next time!",
-    });
+  const createAction = async () => {
+    if (!newActionTitle.trim() || !user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('actions')
+        .insert([
+          {
+            user_id: user.id,
+            title: newActionTitle,
+            status: 'todo'
+          }
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating action:', error);
+        toast({
+          title: "Error",
+          description: "Failed to create action",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const newAction: Action = {
+        id: data.id,
+        title: data.title,
+        status: data.status as 'todo' | 'done',
+        createdAt: new Date(data.created_at),
+        textInputs: [],
+        files: []
+      };
+
+      setActions(prev => [newAction, ...prev]);
+      setNewActionTitle('');
+
+      toast({
+        title: "Action created",
+        description: `"${newActionTitle}" has been added to your tasks`,
+      });
+    } catch (error) {
+      console.error('Error creating action:', error);
+    }
   };
 
-  const createAction = () => {
-    if (!newActionTitle.trim() || !currentUser) return;
+  const updateAction = async (actionId: string, updates: { title?: string; status?: 'todo' | 'done' }) => {
+    if (!user) return;
 
-    const newAction: Action = {
-      id: `action_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      title: newActionTitle,
-      status: 'todo',
-      createdAt: new Date(),
-      textInputs: [],
-      files: []
-    };
+    try {
+      const { error } = await supabase
+        .from('actions')
+        .update(updates)
+        .eq('id', actionId)
+        .eq('user_id', user.id);
 
-    const updatedActions = [...actions, newAction];
-    setActions(updatedActions);
-    saveUserActions(currentUser.id, updatedActions);
-    setNewActionTitle('');
+      if (error) {
+        console.error('Error updating action:', error);
+        return;
+      }
 
-    toast({
-      title: "Action created",
-      description: `"${newActionTitle}" has been added to your tasks`,
-    });
+      setActions(prev => 
+        prev.map(action =>
+          action.id === actionId ? { ...action, ...updates } : action
+        )
+      );
+    } catch (error) {
+      console.error('Error updating action:', error);
+    }
   };
 
-  const updateAction = (actionId: string, updates: Partial<Action>) => {
-    if (!currentUser) return;
+  const deleteAction = async (actionId: string) => {
+    if (!user) return;
 
-    const updatedActions = actions.map(action =>
-      action.id === actionId ? { ...action, ...updates } : action
-    );
-    setActions(updatedActions);
-    saveUserActions(currentUser.id, updatedActions);
-  };
+    try {
+      const { error } = await supabase
+        .from('actions')
+        .delete()
+        .eq('id', actionId)
+        .eq('user_id', user.id);
 
-  const deleteAction = (actionId: string) => {
-    if (!currentUser) return;
+      if (error) {
+        console.error('Error deleting action:', error);
+        toast({
+          title: "Error",
+          description: "Failed to delete action",
+          variant: "destructive",
+        });
+        return;
+      }
 
-    const updatedActions = actions.filter(action => action.id !== actionId);
-    setActions(updatedActions);
-    saveUserActions(currentUser.id, updatedActions);
+      setActions(prev => prev.filter(action => action.id !== actionId));
 
-    toast({
-      title: "Action deleted",
-      description: "The action has been removed",
-    });
+      toast({
+        title: "Action deleted",
+        description: "The action has been removed",
+      });
+    } catch (error) {
+      console.error('Error deleting action:', error);
+    }
   };
 
   const toggleActionStatus = (actionId: string) => {
@@ -155,71 +282,46 @@ const Index = () => {
     });
   };
 
+  // Placeholder functions for text inputs and files (to be implemented later)
   const addTextInputToAction = (actionId: string, content: string) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action || !content.trim()) return;
-
-    const newTextInput: TextInput = {
-      id: `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      content: content.trim(),
-      isEditing: false
-    };
-
-    const updatedTextInputs = [...action.textInputs, newTextInput];
-    updateAction(actionId, { textInputs: updatedTextInputs });
+    // TODO: Implement with Supabase
   };
 
   const updateTextInput = (actionId: string, textInputId: string, content: string) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action) return;
-
-    const updatedTextInputs = action.textInputs.map(input =>
-      input.id === textInputId ? { ...input, content, isEditing: false } : input
-    );
-    updateAction(actionId, { textInputs: updatedTextInputs });
+    // TODO: Implement with Supabase
   };
 
   const deleteTextInput = (actionId: string, textInputId: string) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action) return;
-
-    const updatedTextInputs = action.textInputs.filter(input => input.id !== textInputId);
-    updateAction(actionId, { textInputs: updatedTextInputs });
+    // TODO: Implement with Supabase
   };
 
   const setTextInputEditing = (actionId: string, textInputId: string, isEditing: boolean) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action) return;
-
-    const updatedTextInputs = action.textInputs.map(input =>
-      input.id === textInputId ? { ...input, isEditing } : input
-    );
-    updateAction(actionId, { textInputs: updatedTextInputs });
+    // TODO: Implement with Supabase
   };
 
   const addFilesToAction = (actionId: string, files: FileItem[]) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action) return;
-
-    const updatedFiles = [...action.files, ...files];
-    updateAction(actionId, { files: updatedFiles });
-
-    toast({
-      title: "Files uploaded",
-      description: `${files.length} file(s) added to the action`,
-    });
+    // TODO: Implement with Supabase
   };
 
   const deleteFileFromAction = (actionId: string, fileId: string) => {
-    const action = actions.find(a => a.id === actionId);
-    if (!action) return;
-
-    const updatedFiles = action.files.filter(file => file.id !== fileId);
-    updateAction(actionId, { files: updatedFiles });
+    // TODO: Implement with Supabase
   };
 
-  if (!currentUser) {
-    return <LoginForm onLogin={handleLogin} />;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="bg-gradient-to-r from-blue-600 to-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Check className="h-8 w-8 text-white animate-pulse" />
+          </div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginForm />;
   }
 
   const todoActions = actions.filter(action => action.status === 'todo');
@@ -243,12 +345,14 @@ const Index = () => {
             <div className="flex items-center space-x-4">
               <Avatar>
                 <AvatarFallback className="bg-gradient-to-r from-blue-500 to-purple-500 text-white">
-                  {currentUser.username.charAt(0).toUpperCase()}
+                  {profile?.username?.charAt(0)?.toUpperCase() || user.email?.charAt(0)?.toUpperCase() || 'U'}
                 </AvatarFallback>
               </Avatar>
               <div className="hidden sm:block">
-                <p className="text-sm font-medium text-gray-900">{currentUser.username}</p>
-                <p className="text-xs text-gray-500">{currentUser.email}</p>
+                <p className="text-sm font-medium text-gray-900">
+                  {profile?.username || user.email}
+                </p>
+                <p className="text-xs text-gray-500">{user.email}</p>
               </div>
               <Button 
                 variant="outline" 

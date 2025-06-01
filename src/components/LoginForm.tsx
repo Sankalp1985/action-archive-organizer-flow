@@ -5,47 +5,50 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Check, User } from 'lucide-react';
+import { Check, User, ArrowLeft } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
-interface User {
-  id: string;
-  username: string;
-  email: string;
-}
-
-interface LoginFormProps {
-  onLogin: (user: User) => void;
-}
-
-const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
+const LoginForm: React.FC = () => {
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [registerForm, setRegisterForm] = useState({ username: '', email: '', password: '', confirmPassword: '' });
+  const [forgotPasswordForm, setForgotPasswordForm] = useState({ email: '' });
   const [isLoading, setIsLoading] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: loginForm.email,
+        password: loginForm.password,
+      });
 
-    // Check if user exists in localStorage
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find((u: any) => u.email === loginForm.email && u.password === loginForm.password);
+      if (error) {
+        toast({
+          title: "Login failed",
+          description: error.message,
+          variant: "destructive",
+        });
+        return;
+      }
 
-    if (user) {
-      const { password, ...userWithoutPassword } = user;
-      onLogin(userWithoutPassword);
-    } else {
+      toast({
+        title: "Welcome back!",
+        description: `Logged in successfully`,
+      });
+    } catch (error) {
+      console.error('Login error:', error);
       toast({
         title: "Login failed",
-        description: "Invalid email or password",
+        description: "An unexpected error occurred",
         variant: "destructive",
       });
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -62,44 +65,158 @@ const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
       return;
     }
 
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // Check if user already exists
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const existingUser = users.find((u: any) => u.email === registerForm.email);
-
-    if (existingUser) {
+    if (registerForm.password.length < 6) {
       toast({
         title: "Registration failed",
-        description: "User with this email already exists",
+        description: "Password must be at least 6 characters long",
         variant: "destructive",
       });
       setIsLoading(false);
       return;
     }
 
-    // Create new user
-    const newUser = {
-      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      username: registerForm.username,
-      email: registerForm.email,
-      password: registerForm.password, // In real app, this would be hashed
-    };
+    try {
+      const redirectUrl = `${window.location.origin}/`;
+      
+      const { data, error } = await supabase.auth.signUp({
+        email: registerForm.email,
+        password: registerForm.password,
+        options: {
+          emailRedirectTo: redirectUrl,
+          data: {
+            username: registerForm.username,
+          }
+        }
+      });
 
-    users.push(newUser);
-    localStorage.setItem('users', JSON.stringify(users));
+      if (error) {
+        toast({
+          title: "Registration failed",
+          description: error.message,
+          variant: "destructive",
+        });
+        return;
+      }
 
-    const { password, ...userWithoutPassword } = newUser;
-    onLogin(userWithoutPassword);
+      toast({
+        title: "Registration successful",
+        description: "Please check your email to confirm your account",
+      });
 
-    toast({
-      title: "Registration successful",
-      description: "Welcome to TaskFlow!",
-    });
-
-    setIsLoading(false);
+      // Reset form
+      setRegisterForm({ username: '', email: '', password: '', confirmPassword: '' });
+    } catch (error) {
+      console.error('Registration error:', error);
+      toast({
+        title: "Registration failed",
+        description: "An unexpected error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const redirectUrl = `${window.location.origin}/`;
+      
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        forgotPasswordForm.email,
+        {
+          redirectTo: redirectUrl,
+        }
+      );
+
+      if (error) {
+        toast({
+          title: "Reset failed",
+          description: error.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Password reset sent",
+        description: "Check your email for the password reset link",
+      });
+
+      setForgotPasswordForm({ email: '' });
+      setShowForgotPassword(false);
+    } catch (error) {
+      console.error('Password reset error:', error);
+      toast({
+        title: "Reset failed",
+        description: "An unexpected error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (showForgotPassword) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Check className="h-8 w-8 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
+              TaskFlow
+            </h1>
+            <p className="text-gray-600 mt-2">Reset your password</p>
+          </div>
+
+          <Card className="shadow-2xl border-0 bg-white/80 backdrop-blur-sm">
+            <CardHeader className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowForgotPassword(false)}
+                  className="p-2"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                <CardTitle className="text-2xl">Forgot Password</CardTitle>
+              </div>
+              <CardDescription>
+                Enter your email address and we'll send you a password reset link
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="forgot-email">Email</Label>
+                  <Input
+                    id="forgot-email"
+                    type="email"
+                    placeholder="Enter your email"
+                    value={forgotPasswordForm.email}
+                    onChange={(e) => setForgotPasswordForm({ email: e.target.value })}
+                    required
+                  />
+                </div>
+                <Button 
+                  type="submit" 
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+                  disabled={isLoading}
+                >
+                  {isLoading ? 'Sending...' : 'Send Reset Link'}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4">
@@ -152,6 +269,16 @@ const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
                       required
                     />
                   </div>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="px-0 text-sm text-blue-600 hover:text-blue-800"
+                      onClick={() => setShowForgotPassword(true)}
+                    >
+                      Forgot your password?
+                    </Button>
+                  </div>
                   <Button 
                     type="submit" 
                     className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
@@ -191,10 +318,11 @@ const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
                     <Input
                       id="register-password"
                       type="password"
-                      placeholder="Create a password"
+                      placeholder="Create a password (min 6 characters)"
                       value={registerForm.password}
                       onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
                       required
+                      minLength={6}
                     />
                   </div>
                   <div className="space-y-2">
@@ -222,7 +350,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
         </Card>
 
         <div className="text-center mt-6 text-sm text-gray-500">
-          <p>Demo app - Data is stored locally in your browser</p>
+          <p>Your data is securely stored in the cloud</p>
         </div>
       </div>
     </div>
